@@ -634,8 +634,16 @@ function firstRealDate(text) {
   return null;
 }
 
-function checkBlock(block, today, emit, stats, lang = 'py', code = '') {
+// The ignore marker: written inside a comment, it removes every finding of that comment block (the consecutive
+// comment lines that make one block; a single-line comment is its own block). Text after the marker is free
+// (a reason). The comment scanners decide what is a comment, so the same words inside a string are no marker.
+// The dropped findings are counted in stats.ignored and shown in the summary (README).
+const IGNORE_MARK = /(?<![A-Za-z0-9_-])comment-lint\s*:\s*ignore(?![A-Za-z0-9_-])/i;
+
+function checkBlock(block, today, emitAll, stats, lang = 'py', code = '') {
   if (!stats.exempt) stats.exempt = [];
+  const marked = block.lines.some((ln) => IGNORE_MARK.test(ln.text));
+  const emit = marked ? () => { stats.ignored = (stats.ignored || 0) + 1; } : emitAll;
   block.lines.forEach((ln, idx) => {
     const clean = stripDelims(ln.text);
     if (!clean) return;
@@ -840,7 +848,7 @@ function main(argv) {
   }
 
   const findings = []; const readUncertain = []; const exempt = []; let uncertainFiles = 0;
-  const stats = { exemptByBasis: 0, exempt: [] }; let read = 0;
+  const stats = { exemptByBasis: 0, exempt: [], ignored: 0 }; let read = 0;
   for (const f of files) {
     let s;
     try { s = decode(fs.readFileSync(f.abs)); } catch (e) { readErrors.push({ path: f.abs, reason: e.code || e.message }); continue; }
@@ -887,11 +895,11 @@ function main(argv) {
   const summary = en
     ? `COMMENT_LINT_SUMMARY files read ${read}, files skipped ${skippedTotal}${skippedPart}, ` +
       `excluded folders ${excludedDirs} (default ${excluded.defaultDirs}) and files ${excluded.files}, ${depsInfo}, ` +
-      `findings ${findings.length}, deferrals skipped for a basis ${stats.exemptByBasis}, read errors ${readErrors.length}, ` +
+      `findings ${findings.length}, ignored ${stats.ignored}, deferrals skipped for a basis ${stats.exemptByBasis}, read errors ${readErrors.length}, ` +
       `read uncertain ${uncertainFiles}${uncertainText}`
     : `COMMENT_LINT_SUMMARY 읽은 파일 ${read}, 건너뛴 파일 ${skippedTotal}${skippedPart}, ` +
       `제외 폴더 ${excludedDirs}(기본 ${excluded.defaultDirs}) 파일 ${excluded.files}, ${depsInfo}, ` +
-      `발견 ${findings.length}, 근거 있어 넘긴 미루는 주석 ${stats.exemptByBasis}, 읽기 실패 ${readErrors.length}, ` +
+      `발견 ${findings.length}, 무시 ${stats.ignored}, 근거 있어 넘긴 미루는 주석 ${stats.exemptByBasis}, 읽기 실패 ${readErrors.length}, ` +
       `읽기 불확실 ${uncertainFiles}${uncertainText}`;
   const code = read === 0 ? 2 : readErrors.length ? 3 : 0;
 
@@ -899,7 +907,7 @@ function main(argv) {
     process.stdout.write(JSON.stringify({
       findings, readErrors, readUncertain, exempt, depsMissing,
       summary: { read, skipped, excluded, deps: deps ? { total: deps.length, matched: deps.length - depsMissing.length } : null,
-        certain: 0, review: findings.length, exemptByBasis: stats.exemptByBasis, uncertain: uncertainFiles, exitCode: code, text: summary },
+        certain: 0, review: findings.length, exemptByBasis: stats.exemptByBasis, ignored: stats.ignored, uncertain: uncertainFiles, exitCode: code, text: summary },
     }, null, 2) + '\n');
   } else {
     for (const x of findings) process.stdout.write(`${x.path}:${x.line}: ${en ? '[review]' : '[사람 확인]'} ${x.rule}: ${x.message} | ${en ? 'ref' : '근거'}: ${x.ref} | ${x.excerpt}\n`);
