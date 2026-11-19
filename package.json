@@ -1,0 +1,28 @@
+{
+  "name": "comment-lint",
+  "version": "0.1.0",
+  "description": "Report-only checker for deferred comments (TODO, FIXME, HACK) with no issue link, ID or date, passed deadlines, and change-log comment blocks.",
+  "bin": {
+    "comment-lint": "comment_lint.mjs"
+  },
+  "files": [
+    "comment_lint.mjs",
+    "README.md",
+    "README.ko.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node tests/run_tests.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "lint",
+    "comments",
+    "todo",
+    "fixme",
+    "code-review"
+  ],
+  "license": "MIT"
+}
