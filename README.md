@@ -27,7 +27,7 @@ $ comment-lint src --today 2026-11-18
 /work/project/src/app.py:2: [review] defer-no-basis: deferral tag (TODO) with no basis (URL, item ID, date) | ref: README rules: defer-no-basis | # TODO: handle empty files
 /work/project/src/app.py:5: [review] deadline-passed: deadline 2024-06-30 of a deferring comment has passed (FIXME) | ref: README rules: deadline-passed | # FIXME: remove by 2024-06-30
 /work/project/src/app.py:6: [review] defer-word: word that may mean a deferral (for now), no basis | ref: README rules: defer-word | # for now, no caching
-COMMENT_LINT_SUMMARY files read 1, files skipped 0, excluded folders 0 (default 0) and files 0, deps not given, findings 3, deferrals skipped for a basis 1, read errors 0, read uncertain 0
+COMMENT_LINT_SUMMARY files read 1, files skipped 0, excluded folders 0 (default 0) and files 0, deps not given, findings 3, ignored 0, deferrals skipped for a basis 1, read errors 0, read uncertain 0
 ```
 
 Line 4 is not reported: `#42` is a basis (someone is tracking it). Line 5 has a date, but the deadline is in the past, so it is reported anyway.
@@ -122,11 +122,22 @@ Deferrals skipped because of a basis are counted in the summary, and `--json` li
 
 Some spots can be read two ways (a `/` after `}` in JS, a `#` right after a number in PowerShell, a heredoc with no end line, an unclosed string, a comment inside a string substitution, ...). The tool takes the likelier reading and goes on, then marks the file: each finding in that file ends with `(file read with uncertainty)` (`(읽기 불확실 파일)` with `--lang ko`) and has `uncertainRead: true` in JSON, and each spot prints `READ_UNCERTAIN <path>:<line>: <reason>`. The aim is that a comment is never missed silently.
 
+## Ignoring a comment
+
+Put `comment-lint: ignore` inside a comment and the tool reports nothing from that comment block (the run of consecutive comment lines; a one-line comment is its own block). The marker is case-insensitive, blanks around the colon are fine, and any text after it is a free reason:
+
+```python
+# 2026-10-02 first seen in the output of the 9b95f4c3 run, kept as evidence.
+# comment-lint: ignore — the dates are observed evidence, not a change log
+```
+
+Use it where the tool is wrong about a comment, for example a block whose dates are the evidence itself (a log line that was really observed). Do not use it to silence a real deferral; fix or date that comment instead. The same words inside a string are not a marker. The number of findings dropped this way is shown in the summary (`ignored N` in the text summary line, `summary.ignored` in `--json`), so a pile of markers stays visible.
+
 ## Output and exit codes
 
 Text output: one line per finding, then `READ_ERROR`, `READ_UNCERTAIN`, `DEPS_MISSING` lines, then one `COMMENT_LINT_SUMMARY` line.
 
-`--json` prints `{findings[], readErrors[], readUncertain[], exempt[], depsMissing[], summary{...}}`. A finding is `{path, rel, line, confidence, rule, message, ref, excerpt}`; `message` is in the chosen output language. `confidence` is always `"review"`; `summary.certain` is always 0 (kept for readers of older output).
+`--json` prints `{findings[], readErrors[], readUncertain[], exempt[], depsMissing[], summary{...}}`. A finding is `{path, rel, line, confidence, rule, message, ref, excerpt}`; `message` is in the chosen output language. `confidence` is always `"review"`; `summary.certain` is always 0 (kept for readers of older output). `summary.ignored` is the number of findings dropped by the ignore marker.
 
 | Exit | Meaning |
 |---|---|
