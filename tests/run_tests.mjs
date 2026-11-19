@@ -347,6 +347,43 @@ const pairs = [
   P('history: the personal batch label (B plus a number) is not a marker', '.py',
     '# 경위\n# 묶음 B1\n# 묶음 B2\n# 묶음 B3\n# a\n# b\n# c\n# d\n# e\n', [],
     '# 경위\n# 정정 1\n# 종전 2\n# 3라운드\n# a\n# b\n# c\n# d\n# e\n', ['1:review:history-block']),
+
+  // ---- ignore marker (2026-11-19) ----
+  P('ignore: a marked py block is dropped, the block next to it is found', '.py',
+    '# TODO: a\n# comment-lint: ignore\nx = 1\n# TODO: b\n', ['4:review:defer-no-basis'],
+    '# TODO: a\n# comment-lint: ignore — 날짜는 관측 증거\nx = 1\n'),
+  P('ignore: the marker inside a py docstring drops that docstring block', '.py',
+    'def f():\n    """Doc.\n    TODO: a\n    """\ndef g():\n    """TODO: b\n    comment-lint: ignore\n    """\n', ['3:review:defer-no-basis'],
+    'def g():\n    """TODO: b\n    comment-lint: ignore\n    """\n'),
+  P('ignore: the same words inside a string are no marker', '.py',
+    'x = "comment-lint: ignore"\n# TODO: real\n', ['2:review:defer-no-basis'],
+    'x = "TODO: in a string"\n# TODO: real comment-lint: ignore\n'),
+  P('ignore: a js string with the marker does not drop the comment after it', '.js',
+    'const s = "// comment-lint: ignore"; // TODO: real\n', ['1:review:defer-no-basis'],
+    'const s = "text"; // TODO: real comment-lint: ignore\n'),
+  P('ignore: a one-line comment drops only its own line', '.js',
+    'const a = 1; // TODO: a comment-lint: ignore\nconst b = 2; // TODO: b\n', ['2:review:defer-no-basis'],
+    'const a = 1; // TODO: a comment-lint: ignore\nconst b = 2; // note\n'),
+  P('ignore: a js block comment with the marker on a later line is dropped as a whole', '.js',
+    '/*\n * HACK keeps old order\n * comment-lint: ignore\n */\n/*\n * HACK other\n */\n', ['6:review:defer-no-basis'],
+    '/*\n * HACK keeps old order\n * comment-lint: ignore\n */\n'),
+  P('ignore: the marker in a css comment', '.css',
+    '/* TODO: a comment-lint: ignore */\n.a { color: red; } /* TODO: b */\n', ['2:review:defer-no-basis'],
+    '/* TODO: a comment-lint: ignore */\n'),
+  P('ignore: the marker in ps1 # and <# #> comments', '.ps1',
+    '# TODO: a\n# comment-lint: ignore\n$x = 1\n<#\n TODO: b\n#>\n', ['5:review:defer-no-basis'],
+    '<#\n TODO: b\n comment-lint: ignore\n#>\n# TODO: c comment-lint: ignore\n'),
+  P('ignore: the marker in an sh comment', '.sh',
+    'echo 1 # TODO: a comment-lint: ignore\necho 2 # TODO: b\n', ['2:review:defer-no-basis'],
+    'echo 1 # TODO: a comment-lint: ignore\n'),
+  P('ignore: case, spaces around the colon and a free reason count; look-alikes do not', '.py',
+    '# TODO: a comment-lint: ignored\nx = 1\n# TODO: b xcomment-lint: ignore\nx = 2\n# TODO: c comment-lint: ignore-all\nx = 3\n# TODO: d comment-lint ignore\nx = 4\n# TODO: e comment-lint: ign\n',
+    ['1:review:defer-no-basis', '3:review:defer-no-basis', '5:review:defer-no-basis', '7:review:defer-no-basis', '9:review:defer-no-basis'],
+    '# TODO: a COMMENT-LINT :  IGNORE\nx = 1\n# TODO: b comment-lint:ignore because the date is evidence\nx = 2\n# TODO: c comment-lint: ignore, reason: dates\n'),
+  P('ignore: every rule is dropped from a marked block (deadline, workaround, history)', '.py',
+    '# TODO: 2026-10-01까지\n#\n# workaround for X\n#\n# 일단 둔다\n#\n# 경위\n# 2026-11-01 처음\n# 정정\n# 3라운드\n# a\n# b\n# c\n',
+    ['1:review:deadline-passed', '3:review:workaround', '5:review:defer-word', '1:review:history-block'],
+    '# TODO: 2026-10-01까지\n#\n# workaround for X\n#\n# 일단 둔다\n#\n# 경위\n# 2026-11-01 처음\n# 정정\n# 3라운드\n# a\n# b\n# comment-lint: ignore\n'),
 ];
 
 // The JSON of one run with every human-readable string value blanked: what is left (keys, rule names, lines,
@@ -609,6 +646,38 @@ for (const t of pairs) {
     findingLines(t.out).length >= 2 && findingLines(t.out).every((l) => l.includes('[사람 확인]')) && !/(?<!불)확실/.test(t.out), t.out);
 }
 
+// Ignore marker: the dropped findings are counted in summary.ignored and in the text summary line (en and ko);
+// nothing else in the output changes, and the finding lines still fit the pattern the Sunday script parses.
+{
+  const src = '# TODO: a\n# FIXME: b\n# workaround c\n# comment-lint: ignore\nx = 1\n# TODO: d\n';
+  const ig = write('ign/n.py', src);
+  const r = run([ig]);
+  check('[new]    ignore: JSON summary.ignored counts every dropped finding of the marked block (3), the next block is found',
+    r.code === 0 && r.j && r.j.summary.ignored === 3 && same(rules(r), ['6:review:defer-no-basis']) && r.j.summary.review === 1 && r.j.summary.exitCode === 0,
+    JSON.stringify(r.j && [r.j.summary, rules(r)]));
+  const keys = r.j ? Object.keys(r.j.summary).join(',') : '';
+  check('[new]    ignore: the older JSON summary keys are all still there',
+    ['read', 'skipped', 'excluded', 'deps', 'certain', 'review', 'exemptByBasis', 'uncertain', 'exitCode', 'text'].every((k) => keys.split(',').includes(k)), keys);
+  const none = run([write('ign/none.py', '# TODO: a\n')]);
+  check('[new]    ignore: a file with no marker has ignored 0', none.j && none.j.summary.ignored === 0 && none.j.findings.length === 1, JSON.stringify(none.j && none.j.summary));
+  const tEn = runRaw([ig, '--today', '2026-11-18'], { lang: 'en' }); const tKo = runRaw([ig, '--today', '2026-11-18'], { lang: 'ko' });
+  check('[new]    ignore: the text summary line says "findings 1, ignored 3," in English and "발견 1, 무시 3," in Korean',
+    tEn.code === 0 && / findings 1, ignored 3, deferrals skipped/.test(tEn.out) && tKo.code === 0 && / 발견 1, 무시 3, 근거 있어 넘긴/.test(tKo.out), tEn.out + tKo.out);
+  const zeroEn = runRaw([write('ign/zero.py', '# fine\n'), '--today', '2026-11-18'], { lang: 'en' });
+  check('[new]    ignore: the English summary line shows ignored 0 when nothing was dropped', / findings 0, ignored 0, /.test(zeroEn.out), zeroEn.out);
+  const hist = write('ign/h.py', '# 경위\n# 2026-11-01 처음\n# 정정\n# 3라운드\n# a\n# b\n# c\n# d\n# comment-lint: ignore\n');
+  const hr = run([hist]);
+  check('[new]    ignore: a dropped history-block counts once', hr.j && hr.j.findings.length === 0 && hr.j.summary.ignored === 1, JSON.stringify(hr.j && hr.j.summary));
+  // The line pattern of memory-audit-weekly.ps1: every finding line of the text output, with and without a marker in the run.
+  const FINDING_LINE = /^(.+?):(\d+): \[[^\]]+\] ([\w-]+):/;
+  for (const lang of ['en', 'ko']) {
+    const t = runRaw([path.join(TMP, 'ex'), ig, '--today', '2026-11-18'], { lang });
+    const lines = t.out.split('\n').filter((l) => l.trim() && !l.startsWith('COMMENT_LINT_SUMMARY '));
+    check(`[new]    ignore: every finding line of the text output matches the weekly script pattern (${lang})`,
+      lines.length >= 3 && lines.every((l) => FINDING_LINE.test(l)), t.out);
+  }
+}
+
 // Output language: English by default, Korean by --lang ko or COMMENT_LINT_LANG; detection and JSON structure never change.
 {
   check('[new]    lang: all pairs give the same JSON structure, rules, lines and exit code in en and ko (human strings blanked)',
@@ -647,12 +716,12 @@ for (const t of pairs) {
     `${all}:5: [review] defer-word: word that may mean a deferral (for now), no basis | ref: README rules: defer-word | # for now skip audio`,
     `${all}:7: [review] workaround: workaround: check whether it is a temporary bypass or a "why" comment worth keeping (an outside trap) | ref: README rules: workaround | # workaround for X`,
     `${all}:9: [review] defer-word: word that may mean a deferral (temporarily), no basis | ref: README rules: defer-word | # temporarily off`,
-    'COMMENT_LINT_SUMMARY files read 1, files skipped 0, excluded folders 0 (default 0) and files 0, deps not given, findings 5, deferrals skipped for a basis 0, read errors 0, read uncertain 0',
+    'COMMENT_LINT_SUMMARY files read 1, files skipped 0, excluded folders 0 (default 0) and files 0, deps not given, findings 5, ignored 0, deferrals skipped for a basis 0, read errors 0, read uncertain 0',
   ];
   check('[new]    lang en: finding lines and summary line, exact text', JSON.stringify(txt(en)) === JSON.stringify(exp), en.out);
   const ko = runRaw([all, '--today', '2026-11-18'], { lang: 'ko' });
   check('[new]    lang ko: the Korean lines are the ones the tool printed before (summary line exact)',
-    txt(ko).at(-1) === 'COMMENT_LINT_SUMMARY 읽은 파일 1, 건너뛴 파일 0, 제외 폴더 0(기본 0) 파일 0, deps 미지정, 발견 5, 근거 있어 넘긴 미루는 주석 0, 읽기 실패 0, 읽기 불확실 0' &&
+    txt(ko).at(-1) === 'COMMENT_LINT_SUMMARY 읽은 파일 1, 건너뛴 파일 0, 제외 폴더 0(기본 0) 파일 0, deps 미지정, 발견 5, 무시 0, 근거 있어 넘긴 미루는 주석 0, 읽기 실패 0, 읽기 불확실 0' &&
     txt(ko)[0] === `${all}:1: [사람 확인] defer-no-basis: 미루는 주석의 표지(TODO)가 있고 근거(URL, 항목 ID, 날짜)가 없다 | 근거: README rules: defer-no-basis | # TODO: remove this` &&
     txt(ko)[1].includes('미루는 주석의 기한 2026-10-01이 지났다(FIXME)') && txt(ko)[2].includes('미루는 뜻일 수 있는 낱말(for now), 근거 없음') && txt(ko)[3].includes('임시 우회인지'), ko.out);
 
