@@ -27,7 +27,7 @@ $ comment-lint src --lang ko --today 2026-11-18
 /work/project/src/app.py:2: [사람 확인] defer-no-basis: 미루는 주석의 표지(TODO)가 있고 근거(URL, 항목 ID, 날짜)가 없다 | 근거: README rules: defer-no-basis | # TODO: handle empty files
 /work/project/src/app.py:5: [사람 확인] deadline-passed: 미루는 주석의 기한 2024-06-30이 지났다(FIXME) | 근거: README rules: deadline-passed | # FIXME: remove by 2024-06-30
 /work/project/src/app.py:6: [사람 확인] defer-word: 미루는 뜻일 수 있는 낱말(for now), 근거 없음 | 근거: README rules: defer-word | # for now, no caching
-COMMENT_LINT_SUMMARY 읽은 파일 1, 건너뛴 파일 0, 제외 폴더 0(기본 0) 파일 0, deps 미지정, 발견 3, 근거 있어 넘긴 미루는 주석 1, 읽기 실패 0, 읽기 불확실 0
+COMMENT_LINT_SUMMARY 읽은 파일 1, 건너뛴 파일 0, 제외 폴더 0(기본 0) 파일 0, deps 미지정, 발견 3, 무시 0, 근거 있어 넘긴 미루는 주석 1, 읽기 실패 0, 읽기 불확실 0
 ```
 
 4행은 `#42`가 근거라서(누군가 추적하고 있어서) 내지 않아요. 5행은 날짜가 있지만 기한이 지나서 내요. `--lang ko`를 빼면 같은 결과가 영어 문구로 나와요(기본값은 영어).
@@ -68,6 +68,17 @@ COMMENT_LINT_SUMMARY 읽은 파일 1, 건너뛴 파일 0, 제외 폴더 0(기본
 - 바뀌는 것: 사람이 읽는 문구뿐이에요. 텍스트 출력에서는 라벨(`[review]` 또는 `[사람 확인]`), 참조 라벨(`ref:` 또는 `근거:`), 메시지, 읽기 불확실 사유, 요약 줄의 문구예요. `--json`에서는 문자열 값 `message`, `reason`, `basis`, `summary.text`가 언어를 따라가요.
 - 바뀌지 않는 것: 탐지(같은 줄을 같은 규칙 이름으로 찾아요), JSON 키와 구조, `ref`, `excerpt`, 종료 코드, `COMMENT_LINT_SUMMARY`, `READ_ERROR`, `READ_UNCERTAIN`, `DEPS_MISSING` 줄 머리예요. stderr의 오류 줄(`ARG_ERROR`, `PATH_ERROR`, `NO_FILES_READ`)은 영어만 있어요.
 - 스크립트는 메시지 문구가 아니라 규칙 이름이나 JSON 키를 읽어야 해요.
+
+## 주석 하나 빼기
+
+주석 안에 `comment-lint: ignore`를 적으면 그 주석 블록(이어진 주석 줄 묶음, 한 줄짜리 주석은 그 줄만)에서는 아무것도 내지 않아요. 대소문자는 가리지 않고, 콜론 앞뒤 공백은 있어도 되고, 뒤에 이유를 아무 글로 붙일 수 있어요.
+
+```python
+# 2026-10-02 9b95f4c3 실행의 출력에서 처음 봄, 증거로 남김.
+# comment-lint: ignore — 날짜는 관측 증거이지 경위 기록이 아님
+```
+
+도구가 잘못 잡는 주석에만 써요. 예를 들어 날짜 자체가 증거인 블록(실제로 본 로그 줄)이에요. 진짜로 미루는 주석을 입 다물게 하려고 쓰지 말고, 그 주석을 고치거나 날짜를 붙여요. 문자열 안의 같은 글은 표지가 아니에요. 이렇게 빠진 발견 수는 요약에 나와요(텍스트 요약 줄의 `무시 N`, `--json`의 `summary.ignored`). 그래서 표지를 남발하면 숫자로 드러나요.
 
 ## 사용법, 규칙, 출력
 
