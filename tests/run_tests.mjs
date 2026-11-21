@@ -344,7 +344,7 @@ const pairs = [
   P('en history: changed, fixed, reverted on 3 lines vs fixed-size, fixed width, unchanged', '.py',
     '# How the default came about\n# Changed the default from 5 to 10\n# Fixed the off-by-one in the loop\n# Reverted after the outage\n# a\n# b\n# c\n# d\n# e\n', ['1:review:history-block'],
     '# Buffer layout\n# A fixed-size buffer holds the header\n# The fixed width of the field is 8\n# The value is unchanged between calls\n# Returns true if the file has changed\n# Stops when changed or closed\n# a\n# b\n# c\n# d\n# e\n'),
-  P('history: the personal batch label (B plus a number) is not a marker', '.py',
+  P('history: a batch label (B plus a number) is not a marker', '.py',
     '# 경위\n# 묶음 B1\n# 묶음 B2\n# 묶음 B3\n# a\n# b\n# c\n# d\n# e\n', [],
     '# 경위\n# 정정 1\n# 종전 2\n# 3라운드\n# a\n# b\n# c\n# d\n# e\n', ['1:review:history-block']),
 
@@ -370,9 +370,29 @@ const pairs = [
   P('ignore: the marker in a css comment', '.css',
     '/* TODO: a comment-lint: ignore */\n.a { color: red; } /* TODO: b */\n', ['2:review:defer-no-basis'],
     '/* TODO: a comment-lint: ignore */\n'),
+  P('ignore: two neighbouring css /* */ comments are two blocks; the marker works inside the same comment', '.css',
+    '/* TODO: a */\n/* comment-lint: ignore */\n', ['1:review:defer-no-basis'],
+    '/* TODO: a\n   comment-lint: ignore */\n'),
   P('ignore: the marker in ps1 # and <# #> comments', '.ps1',
     '# TODO: a\n# comment-lint: ignore\n$x = 1\n<#\n TODO: b\n#>\n', ['5:review:defer-no-basis'],
     '<#\n TODO: b\n comment-lint: ignore\n#>\n# TODO: c comment-lint: ignore\n'),
+  // Curly quotes: PowerShell takes them as quotes in a file it reads as Unicode, Windows PowerShell 5.1 does not in a
+  // UTF-8 file without a BOM. Both readings are kept: a comment either reading finds is reported, and the file is unsure.
+  P('ps1: curly-quoted string with an ignore marker does not hide the real comment', '.ps1',
+    'Write-Output “text # comment-lint: ignore” # TODO: real\n', ['1:review:defer-no-basis'],
+    'Write-Output "text # comment-lint: ignore" # TODO: real\n', ['1:review:defer-no-basis'], { unc: true }),
+  P('ps1: # inside a curly-quoted string is read both ways and unsure', '.ps1',
+    '$s = “text # TODO: sample”\n', ['1:review:defer-no-basis'],
+    '$s = "text # TODO: sample"\n', [], { unc: true }),
+  P('ps1: curly apostrophe in an ASCII string keeps the comments below', '.ps1',
+    "Write-Output 'it’s ok'\n# TODO: one\n$x = 'b'\n# TODO: two\n", ['2:review:defer-no-basis', '4:review:defer-no-basis'],
+    "Write-Output 'its ok'\n# TODO: one\n$x = 'b'\n# TODO: two\n", ['2:review:defer-no-basis', '4:review:defer-no-basis'], { unc: true }),
+  P('ps1: curly here-string markers, the comment after it is read', '.ps1',
+    '$h = @‘\n# TODO body\n\'@\n# FIXME: real\n', ['2:review:defer-no-basis', '4:review:defer-no-basis'],
+    "$h = @'\n# TODO body\n'@\n# FIXME: real\n", ['4:review:defer-no-basis'], { unc: true }),
+  P('ps1: curly quotes only in comments or inside ASCII strings change nothing', '.ps1',
+    '$x = 1 # TODO: it’s “quoted”\n', ['1:review:defer-no-basis'],
+    'Write-Output "it’s ok" # TODO: real\n', ['1:review:defer-no-basis']),
   P('ignore: the marker in an sh comment', '.sh',
     'echo 1 # TODO: a comment-lint: ignore\necho 2 # TODO: b\n', ['2:review:defer-no-basis'],
     'echo 1 # TODO: a comment-lint: ignore\n'),
@@ -632,6 +652,37 @@ for (const t of pairs) {
     threw ? `threw ${threw.code || threw.message}` : `code=${code} ${JSON.stringify(j && j.summary)}`);
 }
 
+// Started through a link (a Windows junction to its folder, `npm link`, a global bin symlink to the file): Node runs
+// the real path of the module, so the tool must still run and print its result, never exit 0 with no output.
+// The linked copy lives under the test folder, so removing the link can never touch the tool itself.
+{
+  const real = write('entry/real/comment_lint.mjs', fs.readFileSync(TOOL));
+  const fx = write('entry/x.py', '# TODO: via link\n');
+  const viaPath = (p) => {
+    const r = spawnSync(process.execPath, [p, fx, '--json', '--today', '2026-11-18'], { encoding: 'utf8' });
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* checked below */ }
+    return { ok: r.status === 0 && !!j && j.findings.length === 1, detail: `code=${r.status} stdout=${r.stdout.length} chars ${r.stderr}` };
+  };
+  const direct = viaPath(real);
+  check('[clean]  entry: started by its real path, the tool prints its JSON result', direct.ok, direct.detail);
+  const dirLink = path.join(TMP, 'entry', 'dirlink');
+  let made = false;
+  try { fs.symlinkSync(path.dirname(real), dirLink, 'junction'); made = true; } catch { /* links not allowed here */ }
+  if (made) {
+    let r;
+    try { r = viaPath(path.join(dirLink, 'comment_lint.mjs')); } finally { try { fs.rmdirSync(dirLink); } catch { fs.unlinkSync(dirLink); } }
+    check('[defect] entry: started through a folder link (junction), the tool still prints its JSON result', r.ok, r.detail);
+  } else { skip++; console.log('SKIP entry through a folder link (cannot create a link here)'); }
+  const fileLink = path.join(TMP, 'entry', 'bin-link.mjs');
+  made = false;
+  try { fs.symlinkSync(real, fileLink, 'file'); made = true; } catch { /* file links need a privilege on Windows */ }
+  if (made) {
+    let r;
+    try { r = viaPath(fileLink); } finally { fs.unlinkSync(fileLink); }
+    check('[defect] entry: started through a file symlink (a global bin link), the tool still prints its JSON result', r.ok, r.detail);
+  } else { skip++; console.log('SKIP entry through a file symlink (cannot create a file link here)'); }
+}
+
 // One grade only: every finding of every run above is review, and no summary counts another grade.
 {
   const grades = [...new Set(seenFindings.map((f) => f.confidence))];
@@ -647,7 +698,7 @@ for (const t of pairs) {
 }
 
 // Ignore marker: the dropped findings are counted in summary.ignored and in the text summary line (en and ko);
-// nothing else in the output changes, and the finding lines still fit the pattern the Sunday script parses.
+// nothing else in the output changes, and the finding lines still fit the pattern a downstream script parses.
 {
   const src = '# TODO: a\n# FIXME: b\n# workaround c\n# comment-lint: ignore\nx = 1\n# TODO: d\n';
   const ig = write('ign/n.py', src);
@@ -668,12 +719,24 @@ for (const t of pairs) {
   const hist = write('ign/h.py', '# 경위\n# 2026-11-01 처음\n# 정정\n# 3라운드\n# a\n# b\n# c\n# d\n# comment-lint: ignore\n');
   const hr = run([hist]);
   check('[new]    ignore: a dropped history-block counts once', hr.j && hr.j.findings.length === 0 && hr.j.summary.ignored === 1, JSON.stringify(hr.j && hr.j.summary));
-  // The line pattern of memory-audit-weekly.ps1: every finding line of the text output, with and without a marker in the run.
+  // The free reason after the marker is not read by the rules: an item ID there is no basis, a tag or a date there is no marker.
+  const cnt = (r) => (r.j ? `${r.j.findings.length}/${r.j.summary.ignored}/${r.j.summary.exemptByBasis}/${r.j.exempt.length}` : 'JSON_PARSE_FAILED');
+  const rb = run([write('ign/reason-basis.py', '# TODO: handle timeout\n# comment-lint: ignore - see #42\n')]);
+  check('[defect] ignore: a #42 in the reason is no basis, so the TODO counts as ignored (findings/ignored/exemptByBasis/exempt 0/1/0/0)', cnt(rb) === '0/1/0/0', cnt(rb));
+  const rbClean = run([write('ign/reason-basis-clean.py', '# TODO: handle timeout, see #42\n# comment-lint: ignore\n')]);
+  check('[clean]  ignore: a #42 before the marker is still a basis (0/0/1/1)', cnt(rbClean) === '0/0/1/1', cnt(rbClean));
+  const rt = run([write('ign/reason-tag.py', '# protocol fixture\n# comment-lint: ignore - literal TODO in output\n')]);
+  check('[defect] ignore: a TODO in the reason of a clean block is no finding to ignore (0/0/0/0)', cnt(rt) === '0/0/0/0', cnt(rt));
+  const rtClean = run([write('ign/reason-tag-clean.py', '# TODO: literal in output\n# comment-lint: ignore - protocol fixture\n')]);
+  check('[clean]  ignore: a TODO before the marker is still dropped and counted (0/1/0/0)', cnt(rtClean) === '0/1/0/0', cnt(rtClean));
+  const rh = run([write('ign/reason-hist.py', '# notes\n# 정정 1\n# 종전 2\n# a\n# b\n# c\n# d\n# e\n# comment-lint: ignore - 2026-10-02 dates are evidence\n')]);
+  check('[defect] ignore: a date in the reason is no history marker (0/0/0/0)', cnt(rh) === '0/0/0/0', cnt(rh));
+  // The finding-line pattern a downstream script parses: every finding line of the text output, with and without a marker in the run.
   const FINDING_LINE = /^(.+?):(\d+): \[[^\]]+\] ([\w-]+):/;
   for (const lang of ['en', 'ko']) {
     const t = runRaw([path.join(TMP, 'ex'), ig, '--today', '2026-11-18'], { lang });
     const lines = t.out.split('\n').filter((l) => l.trim() && !l.startsWith('COMMENT_LINT_SUMMARY '));
-    check(`[new]    ignore: every finding line of the text output matches the weekly script pattern (${lang})`,
+    check(`[new]    ignore: every finding line of the text output matches the downstream parser pattern (${lang})`,
       lines.length >= 3 && lines.every((l) => FINDING_LINE.test(l)), t.out);
   }
 }
