@@ -3,7 +3,7 @@
 // It never writes, renames or deletes any file. Contract (exit codes, output format, rules): README.md.
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const EXT_LANG = {
   '.py': 'py', '.js': 'js', '.mjs': 'js', '.cjs': 'js', '.ts': 'js',
@@ -234,14 +234,36 @@ function scanCss(c) {
 }
 
 // ---- PowerShell ----
+// The tokenizer takes U+2018-U+201B as ' and U+201C-U+201E as " (also in here-string markers), but Windows
+// PowerShell 5.1 reads a UTF-8 file without a BOM in the ANSI code page, where they are not quotes. A file that
+// has them is read both ways: the curly reading is kept, a comment only the plain reading finds is added, and
+// every spot where the two differ is unsure (README "Uncertain reading").
+const PS_Q = { sq: "'", dq: '"' };
+const PS_Q_CURLY = { sq: "'‘’‚‛", dq: '"“”„' };
+function scanPs(c) {
+  c.psq = PS_Q;
+  if (!/[‘-„]/.test(c.s)) { psCode(c, 0, false); return; }
+  const plain = makeCtx(c.s); plain.psq = PS_Q; psCode(plain, 0, false);
+  c.psq = PS_Q_CURLY; psCode(c, 0, false);
+  const key = (x) => `${x.kind}:${x.a}:${x.b}`;
+  const curly = new Set(c.out.map(key)); const flat = new Set(plain.out.map(key));
+  const why = U('curly quote: a comment here depends on the file encoding and PowerShell version', '굽은 따옴표: 파일 인코딩과 PowerShell 판에 따라 여기 주석 읽기가 달라짐');
+  for (const x of c.out) if (!flat.has(key(x))) c.unsure(x.a, why);
+  for (const x of plain.out) {
+    if (curly.has(key(x))) continue;
+    c.unsure(x.a, why);
+    if (!c.out.some((y) => x.a < y.b && y.a < x.b)) c.out.push(x);
+  }
+}
+
 // '#' and '<#' open a comment at the start of a token. Right after a bareword (a#b) they are part of the word.
 // Right after a number, a variable, a closing bracket or a quote ($x = 1# c) the parser mode decides, so unsure.
 function psCode(c, i, nested, limit = c.s.length) {
-  const s = c.s; let depth = 0; let tokStart = i;
+  const s = c.s; const { sq, dq } = c.psq; let depth = 0; let tokStart = i;
   const hashKind = (k) => {
     const tok = s.slice(tokStart, k);
     if (tok === '') return 'comment';
-    if (/^[$\d]/.test(tok) || /[)\]'"]$/.test(tok)) { c.unsure(k, U(`# right after token ${tok.slice(-20)} (comment or word, unclear)`, `토큰 ${tok.slice(-20)} 바로 뒤의 # (주석인지 낱말인지 모름)`)); return 'comment'; }
+    if (/^[$\d]/.test(tok) || /[)\]]$/.test(tok) || sq.includes(tok.slice(-1)) || dq.includes(tok.slice(-1))) { c.unsure(k, U(`# right after token ${tok.slice(-20)} (comment or word, unclear)`, `토큰 ${tok.slice(-20)} 바로 뒤의 # (주석인지 낱말인지 모름)`)); return 'comment'; }
     return 'word';
   };
   while (i < limit) {
@@ -273,40 +295,41 @@ function psCode(c, i, nested, limit = c.s.length) {
       if (k < 0) c.unsure(i, U('unclosed ${', '닫히지 않은 ${'));
       i = k < 0 ? s.length : k + 1; continue;
     }
-    if (ch === '@' && (s[i + 1] === '"' || s[i + 1] === "'") && s.slice(i + 2, eol(s, i)).trim() === '') { i = psHereString(c, i); tokStart = i; continue; }
-    if (ch === "'") { i = psSingle(c, i); continue; }
-    if (ch === '"') { i = psDouble(c, i); continue; }
+    if (ch === '@' && i + 1 < s.length && (sq + dq).includes(s[i + 1]) && s.slice(i + 2, eol(s, i)).trim() === '') { i = psHereString(c, i); tokStart = i; continue; }
+    if (sq.includes(ch)) { i = psSingle(c, i); continue; }
+    if (dq.includes(ch)) { i = psDouble(c, i); continue; }
     i++;
   }
   if (nested) c.unsure(i, U('unclosed $( substitution', '닫히지 않은 $( 치환식'));
   return i;
 }
 
+// Any quote of the same kind closes the string, and two in a row are one escaped quote ('a’'b' is one string).
 function psSingle(c, i) {
-  const s = c.s, n = s.length; let j = i + 1;
-  while (j < n) { if (s[j] === "'") { if (s[j + 1] === "'") { j += 2; continue; } return j + 1; } j++; }
+  const s = c.s, n = s.length, { sq } = c.psq; let j = i + 1;
+  while (j < n) { if (sq.includes(s[j])) { if (j + 1 < n && sq.includes(s[j + 1])) { j += 2; continue; } return j + 1; } j++; }
   c.unsure(i, U('unclosed string', '닫히지 않은 문자열')); return n;
 }
 
 function psDouble(c, i) {
-  const s = c.s, n = s.length; let j = i + 1;
+  const s = c.s, n = s.length, { dq } = c.psq; let j = i + 1;
   while (j < n) {
     const ch = s[j];
     if (ch === '`') { j = skipEsc(s, j); continue; }
-    if (ch === '"') { if (s[j + 1] === '"') { j += 2; continue; } return j + 1; }
+    if (dq.includes(ch)) { if (j + 1 < n && dq.includes(s[j + 1])) { j += 2; continue; } return j + 1; }
     if (ch === '$' && s[j + 1] === '(') { c.strDepth++; j = psCode(c, j + 2, true); c.strDepth--; continue; }
     j++;
   }
   c.unsure(i, U('unclosed string', '닫히지 않은 문자열')); return n;
 }
 
-// The closing '@ or "@ must start a line (no indent). Without one the body is read as code and the file is unsure.
+// The closing '@ or "@ (any quote of the opening kind) must start a line (no indent). Without one the body is read as code and the file is unsure.
 function psHereString(c, i) {
-  const s = c.s; const q = s[i + 1];
-  const re = new RegExp('\\n' + q + '@', 'g'); re.lastIndex = i;
+  const s = c.s; const q = s[i + 1]; const expand = c.psq.dq.includes(q);
+  const re = new RegExp('\\n[' + (expand ? c.psq.dq : c.psq.sq) + ']@', 'g'); re.lastIndex = i;
   const m = re.exec(s);
   if (!m) { c.unsure(i, U(`here-string with no closing ${q}@ line`, `닫는 ${q}@ 줄이 없는 here-string`)); return eol(s, i); }
-  if (q === '"') {
+  if (expand) {
     let k = s.indexOf('$(', i + 2);
     while (k >= 0 && k < m.index) {
       if (s[k - 1] === '`') { k = s.indexOf('$(', k + 2); continue; }
@@ -476,7 +499,7 @@ function analyze(s, lang) {
   if (lang === 'py') scanPy(c);
   else if (lang === 'js') scanJs(c);
   else if (lang === 'css') scanCss(c);
-  else if (lang === 'ps') psCode(c, 0, false);
+  else if (lang === 'ps') scanPs(c);
   else scanSh(c);
   const starts = lineStarts(s); const blocks = [];
   const spans = c.out.sort((x, y) => x.a - y.a);
@@ -637,13 +660,18 @@ function firstRealDate(text) {
 // The ignore marker: written inside a comment, it removes every finding of that comment block (the consecutive
 // comment lines that make one block; a single-line comment is its own block). Text after the marker is free
 // (a reason). The comment scanners decide what is a comment, so the same words inside a string are no marker.
-// The dropped findings are counted in stats.ignored and shown in the summary (README).
+// The dropped findings are counted in stats.ignored and shown in the summary (README). The rules never read the
+// reason, so an item ID, a tag or a date written there changes no count.
 const IGNORE_MARK = /(?<![A-Za-z0-9_-])comment-lint\s*:\s*ignore(?![A-Za-z0-9_-])/i;
 
 function checkBlock(block, today, emitAll, stats, lang = 'py', code = '') {
   if (!stats.exempt) stats.exempt = [];
   const marked = block.lines.some((ln) => IGNORE_MARK.test(ln.text));
   const emit = marked ? () => { stats.ignored = (stats.ignored || 0) + 1; } : emitAll;
+  if (marked) {
+    const cut = (t) => { const m = IGNORE_MARK.exec(t); return m ? t.slice(0, m.index + m[0].length) : t; };
+    block = { ...block, lines: block.lines.map((ln) => ({ ...ln, text: cut(ln.text) })) };
+  }
   block.lines.forEach((ln, idx) => {
     const clean = stripDelims(ln.text);
     if (!clean) return;
@@ -922,7 +950,10 @@ function main(argv) {
 
 export { analyze, commentBlocks, checkBlock, globToRegex, isExcluded, stripDelims, main };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// Node runs the real path of the main module (links resolved), so both sides are compared as real paths: started
+// through a link (a Windows junction, npm link, a global bin symlink) the plain paths differ and main() would not run.
+const realOr = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+if (process.argv[1] && realOr(process.argv[1]) === realOr(fileURLToPath(import.meta.url))) {
   // A reader that closes the pipe early (| head) must not turn a finished run into a failure.
   process.stdout.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
   process.exitCode = main(process.argv.slice(2));
