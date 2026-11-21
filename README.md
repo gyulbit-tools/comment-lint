@@ -5,15 +5,16 @@ Find the `TODO`s nobody will ever come back to: comments that put work off with 
 [한국어 README](README.ko.md)
 
 ```sh
-npm install -g github:OWNER/comment-lint
+npm install -g github:gyulbit-tools/comment-lint
 ```
 
 Or without installing: clone the repository and run `node comment_lint.mjs`. It needs Node.js only (no dependencies).
 
 ## Example
 
+`src/app.py`:
+
 ```python
-# src/app.py
 def load(path):
     # TODO: handle empty files
     data = open(path).read()
@@ -108,7 +109,7 @@ comment-lint <file|folder>... [--exclude <glob>]... [--exclude-from <list>]
 | `workaround` | `workaround` with no basis. It may describe a real trap in an outside API, which is a comment worth keeping. Inside an identifier (`enable_workaround_flag`) it is not reported. |
 | `history-block` | A comment block of 9 or more lines where 3 or more lines carry a history marker. A line counts once. |
 
-A **paragraph** is the run of comment lines between empty comment lines. A **basis** is:
+A **comment block** is one of these: a run of consecutive full-line `#` or `//` comments; one `/* */` or `<# #>` comment, or one Python docstring, however many lines it has; a comment after code on the same line, which is a block of its own. So two `/* */` comments on neighbouring lines are two blocks. A **paragraph** is the run of comment lines between empty comment lines. A **basis** is:
 
 - a URL with a host (`https://example.com/issues/1`; the bare text `"https://"` is not a URL),
 - an item ID: `ABC-12`, `PROJ-20240101-SAMPLE-ITEM` (two or more digits), `#12`, `` `#12` ``, `repo#12`,
@@ -120,11 +121,11 @@ Deferrals skipped because of a basis are counted in the summary, and `--json` li
 
 ## Uncertain reading
 
-Some spots can be read two ways (a `/` after `}` in JS, a `#` right after a number in PowerShell, a heredoc with no end line, an unclosed string, a comment inside a string substitution, ...). The tool takes the likelier reading and goes on, then marks the file: each finding in that file ends with `(file read with uncertainty)` (`(읽기 불확실 파일)` with `--lang ko`) and has `uncertainRead: true` in JSON, and each spot prints `READ_UNCERTAIN <path>:<line>: <reason>`. The aim is that a comment is never missed silently.
+Some spots can be read two ways (a `/` after `}` in JS, a `#` right after a number in PowerShell, a heredoc with no end line, an unclosed string, a comment inside a string substitution, ...). The tool takes the likelier reading and goes on, then marks the file: each finding in that file ends with `(file read with uncertainty)` (`(읽기 불확실 파일)` with `--lang ko`) and has `uncertainRead: true` in JSON, and each spot prints `READ_UNCERTAIN <path>:<line>: <reason>`. The aim is that a comment is never missed silently. A curly quote (`“ ” ‘ ’`) in PowerShell code is a quote or not depending on the file encoding and the PowerShell version, so a file that has one is read both ways: a comment either reading finds is reported, and each spot where the readings differ is marked.
 
 ## Ignoring a comment
 
-Put `comment-lint: ignore` inside a comment and the tool reports nothing from that comment block (the run of consecutive comment lines; a one-line comment is its own block). The marker is case-insensitive, blanks around the colon are fine, and any text after it is a free reason:
+Put `comment-lint: ignore` inside a comment and the tool reports nothing from that comment block. A comment block is defined in [Rules](#rules): consecutive full-line `#` or `//` comments make one block, while one `/* */` or `<# #>` comment or one docstring is a block of its own. So in CSS, put the marker inside the same `/* */` comment. The marker is case-insensitive, blanks around the colon are fine, and any text after it on the same line is a free reason. The rules do not read the reason, so an item ID, a tag or a date written there changes no count:
 
 ```python
 # 2026-10-02 first seen in the output of the 9b95f4c3 run, kept as evidence.
